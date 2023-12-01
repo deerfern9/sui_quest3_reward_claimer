@@ -18,8 +18,18 @@ from typing import Optional
 
 proxy = True
 waiting = False
+retry = 5
 delay = (1, 5)
-sui_rpc = 'https://rpc.ankr.com/sui/045a767e1ce5aa38aa0b766337d4bc95963565b155a2f590f387c94e410fef8b'
+sui_rpc = 'https://sui-mainnet-rpc.nodereal.io'
+
+
+headers = {
+    'authority': 'quests.mystenlabs.com',
+    'accept': '*/*',
+    'content-type': 'application/json',
+    'referer': 'https://quests.mystenlabs.com/',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+}
 
 
 if proxy:
@@ -256,6 +266,7 @@ def merge_sui_coins_tx(client):
     merge_results = []
 
     zero_coins, non_zero_coins, richest_coin, _ = get_sui_coin_objects_for_merge(client)
+
     if len(zero_coins) and len(non_zero_coins):
         logger.info('Попытка to merge zero_coins.')
         transaction = init_transaction(client)
@@ -285,6 +296,29 @@ def merge_sui_coins_tx(client):
         if build_result:
             merge_results.append(build_result)
 
+    if len(zero_coins):
+        logger.info('Попытка to merge zero_coins.')
+        transaction = init_transaction(client)
+        transaction.merge_coins(merge_to=transaction.gas, merge_from=zero_coins)
+        build_result = build_and_execute_tx(
+            client,
+            transaction=transaction,
+            gas_object=ObjectID(richest_coin.object_id)
+        )
+        if build_result:
+            merge_results.append(build_result)
+
+
+def get_claimable_amount(address_: str):
+    params = {
+        'batch': '1',
+        'input': '{"0":{"address":"' + address_ + '","questId":3}}',
+    }
+
+    response = requests.get('https://quests.mystenlabs.com/api/trpc/user', params=params,
+                            proxies=random.choice(proxies) if use_proxy else None,
+                            headers=headers, timeout=10).json()
+
 
 def main():
     mnemonics = read_file('mnemonics.txt')
@@ -292,18 +326,20 @@ def main():
         try:
             config = get_sui_configs(mnemonic)
             client_ = SyncClient(config)
+
             while len(get_all_token(client_, "0x2::sui::SUI")) not in [0, 1]:
                 merge_sui_coins_tx(client_)
-            time.sleep(0.2)
+            time.sleep(0.1)
+
             claim(client_)
             if waiting:
                 time.sleep(random.uniform(delay[0], delay[1]))
         except Exception as e:
             logger.error(f'{config.active_address} | Error: {e}')
-            if mnemonics.count(mnemonic) <= 5:
+            if mnemonics.count(mnemonic) < retry:
                 mnemonics.append(mnemonic)
             else:
-                write_to_file('Error.txt', mnemonic)
+                write_to_file('Error.txt', f'{mnemonic};{e}')
 
 
 if __name__ == '__main__':
